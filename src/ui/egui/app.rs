@@ -54,7 +54,7 @@ use crate::playlist::Playlist;
 use crate::render::main_window_height;
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
-    EqualizerControl, EqualizerRenderState, EqualizerSlider, PlaylistMenuRenderKind,
+    EqualizerControl, EqualizerRenderState, EqualizerSlider, MainSlider, PlaylistMenuRenderKind,
     PlaylistMenuRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
     EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
     PLAYLIST_MIN_WIDTH,
@@ -208,6 +208,7 @@ pub struct EguiFrontendState {
     pub runtime: EguiRuntime,
     pub active_skin: DefaultSkin,
     pub(crate) main_pressed: MainPressed,
+    pub(crate) main_slider_drag_position: Option<(MainSlider, i32)>,
     pub(crate) equalizer_pressed: EqualizerPressed,
     pub equalizer_keyboard_slider: Option<EqualizerSlider>,
     pub playlist_scroll_offset: usize,
@@ -345,6 +346,7 @@ impl EguiFrontendState {
             runtime,
             active_skin,
             main_pressed: MainPressed::None,
+            main_slider_drag_position: None,
             equalizer_pressed: EqualizerPressed::None,
             equalizer_keyboard_slider: None,
             playlist_scroll_offset: 0,
@@ -752,6 +754,26 @@ impl EguiFrontendState {
     }
 
     pub fn poll_playback_backend(&mut self) {
+        #[cfg(target_os = "android")]
+        if self.playback.backend.is_none() {
+            let config = &self.controller.state().config;
+            let equalizer = EqualizerBackendState {
+                active: config.equalizer_active,
+                preamp_position: config.equalizer_preamp_pos,
+                band_positions: config.equalizer_band_pos,
+            };
+            match self
+                .playback
+                .attach_existing_android_backend(config.balance, equalizer)
+            {
+                Ok(true) => {
+                    app_log_info!(backend, "egui attached existing Android playback backend");
+                }
+                Ok(false) => {}
+                Err(err) => self.runtime.pending_messages.push(err),
+            }
+        }
+
         if let Some(backend) = &self.playback.backend {
             let spectrum_layout = if self.playback.visualization.mode() == VisMode::Analyzer
                 && self.playback.visualization.analyzer_style() == VisAnalyzerStyle::Bars
@@ -909,9 +931,7 @@ impl EguiFrontendState {
                         length_ms,
                         title: None,
                     });
-                    if results.len() >= DURATION_INDEX_BATCH_SIZE
-                        && !send_batch(&mut results)
-                    {
+                    if results.len() >= DURATION_INDEX_BATCH_SIZE && !send_batch(&mut results) {
                         return;
                     }
                 }
@@ -3628,10 +3648,7 @@ mod tests {
         assert_eq!(app.take_root_viewport_resize(), None);
         assert!(app.set_playlist_size(350, 290));
         let resized = app.desired_window_size();
-        assert_eq!(
-            app.take_root_viewport_resize(),
-            Some(resized)
-        );
+        assert_eq!(app.take_root_viewport_resize(), Some(resized));
         assert_eq!(app.take_root_viewport_resize(), None);
     }
 

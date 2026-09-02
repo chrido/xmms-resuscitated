@@ -26,6 +26,22 @@ impl PlaybackRuntime {
         }
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn attach_existing_android_backend(
+        &mut self,
+        balance: i32,
+        equalizer: EqualizerBackendState,
+    ) -> Result<bool, String> {
+        if self.backend.is_some() {
+            return Ok(false);
+        }
+        let Some(backend) = super::android::existing_playback_backend() else {
+            return Ok(false);
+        };
+        self.install_backend_with_dsp(Box::new(backend), balance, equalizer)?;
+        Ok(true)
+    }
+
     pub(crate) fn apply_effect(
         &mut self,
         effect: &PlaybackEffect,

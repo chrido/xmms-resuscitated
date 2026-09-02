@@ -872,7 +872,7 @@ impl Playlist {
     }
 
     pub fn load_m3u(contents: &str, base_dir: &Path) -> Self {
-        let _perf_span = crate::perf_span!("saved_playlist_parse");
+        crate::perf_span!("saved_playlist_parse");
         let mut playlist = Self::new();
         playlist.entries.reserve(
             contents

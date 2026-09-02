@@ -148,6 +148,28 @@ def test_android_widget_cold_starts_playback_without_activity(
     assert position_ms < 20_000
 
 
+def test_android_widget_playback_attaches_foreground_analyzer_backend(
+    android_device: AndroidDevice,
+) -> None:
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    _prepare_widget_lifecycle_track(android_device)
+
+    android_device.start_widget_control()
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_media_session_position_at_least(500, timeout=10.0)
+
+    android_device.open_player_from_info_widget()
+
+    android_device.assert_log_contains(
+        "egui attached existing Android playback backend",
+    )
+    android_device.main_player_bounds()
+    android_device.assert_no_app_crash()
+
+
 @pytest.mark.parametrize(
     ("process_fate", "resume_trigger"),
     [

@@ -15,7 +15,7 @@
 //!   atomic so Activity-absent readers and process recreation never see a
 //!   partially written file.
 //! - [`widgets`] owns synchronous widget rendering caches.
-//! - [`jni`] contains JNI ABI adapters and documents the allowed exceptions.
+//! - [`jni_bridge`] contains JNI ABI adapters and documents the allowed exceptions.
 //!
 //! Activity callbacks run on the Android main thread and only validate, convert,
 //! enqueue, or request repaint. The egui thread drains a bounded FIFO batch once
@@ -35,13 +35,14 @@
 
 use std::sync::MutexGuard;
 
-use ::jni::objects::JObject;
-use ::jni::JNIEnv;
+use jni::objects::JObject;
+use jni::JNIEnv;
 
 mod activity;
 mod audio_focus;
 mod events;
-mod jni;
+#[path = "jni.rs"]
+mod jni_bridge;
 mod layout;
 mod media_session;
 mod persistence;
@@ -56,6 +57,7 @@ pub use events::{
     AndroidPlaybackState,
 };
 pub use layout::window_layout_snapshot_pixels;
+pub(crate) use media_session::existing_playback_backend;
 pub use media_session::{
     complete_media_control, shared_playback_backend, sync_media_playlist,
     sync_media_playlist_position, update_playback_notification,

@@ -81,7 +81,7 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     Ok(created)
 }
 
-fn existing_playback_backend() -> Option<RodioBackend> {
+pub(crate) fn existing_playback_backend() -> Option<RodioBackend> {
     PLAYBACK_BACKEND
         .get_or_init(|| Mutex::new(None))
         .lock()

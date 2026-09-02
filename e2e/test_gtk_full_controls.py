@@ -8,7 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from conftest import assert_app_log_contains
+from conftest import assert_app_log_contains, read_process_log
 from gui import (
     EQUALIZER_CONTROL_RECTS,
     PLAYLIST_FOOTER_RECTS,
@@ -18,6 +18,7 @@ from gui import (
     MainButton,
     MainSlider,
     MainToggleButton,
+    MAIN_SLIDER_RECTS,
     MainWindow,
     PANEL_CLOSE_RECT,
     PANEL_SHADE_RECT,
@@ -32,6 +33,7 @@ from gui import (
     run_xdotool,
     screenshot_screen,
     screenshot_tool_available,
+    window_geometry,
 )
 
 pytest: Any = import_module("pytest")
@@ -128,6 +130,60 @@ def test_gui_player_transport_toggles_and_sliders_with_tracks_screenshots_and_lo
         "player: slider changed, slider_name=Balance",
         "player: slider changed, slider_name=Position",
     )
+
+
+def test_gui_holding_position_slider_does_not_repeat_seek(
+    gui_tracked_main_window: MainWindow,
+    gui_app_with_tracks: subprocess.Popen[bytes],
+) -> None:
+    """A stationary held seek knob must emit only the initial position change."""
+    marker = "player: slider changed, slider_name=Position"
+    rect = MAIN_SLIDER_RECTS[MainSlider.POSITION]
+    geometry = window_geometry(gui_tracked_main_window.window_id)
+    scale = geometry.width / 275
+    start_x = round((rect.x + 1) * scale)
+    end_x = round((rect.x + rect.width * 0.55) * scale)
+    y = round((rect.y + rect.height / 2) * scale)
+    baseline = read_process_log(gui_app_with_tracks).count(marker)
+
+    run_xdotool(
+        "windowactivate",
+        "--sync",
+        gui_tracked_main_window.window_id,
+        check=False,
+    )
+    run_xdotool(
+        "mousemove",
+        "--window",
+        gui_tracked_main_window.window_id,
+        str(start_x),
+        str(y),
+    )
+    run_xdotool("mousedown", "1")
+    try:
+        run_xdotool(
+            "mousemove",
+            "--window",
+            gui_tracked_main_window.window_id,
+            str(end_x),
+            str(y),
+        )
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            changed_count = read_process_log(gui_app_with_tracks).count(marker)
+            if changed_count > baseline:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("position-slider drag did not emit an initial change")
+
+        time.sleep(0.8)
+        assert read_process_log(gui_app_with_tracks).count(marker) == changed_count
+    finally:
+        run_xdotool("mouseup", "1", check=False)
+
+    time.sleep(0.2)
+    assert read_process_log(gui_app_with_tracks).count(marker) == changed_count
 
 
 def test_gui_equalizer_controls_and_sliders_screenshots_and_logs(

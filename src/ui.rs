@@ -217,7 +217,7 @@ fn build_preview_window(
     options: PreviewOptions,
     persist_session: bool,
 ) -> Result<(), String> {
-    let _startup_span = crate::perf_span!("gtk_startup");
+    crate::perf_span!("gtk_startup");
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -239,7 +239,7 @@ fn build_preview_window(
     let main_state = Rc::new(RefCell::new(state));
     refresh_xmms_skin_css(main_state.borrow().active_skin());
 
-    let _window_span = crate::perf_span!("gtk_window_build");
+    crate::perf_span!("gtk_window_build");
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Renascene Rust Preview")
@@ -749,7 +749,7 @@ fn build_preview_window(
     if persist_session {
         let main_state = Rc::clone(&main_state);
         gtk::glib::idle_add_local_once(move || {
-            let _backend_span = crate::perf_span!("gtk_backend_init");
+            crate::perf_span!("gtk_backend_init");
             match create_backend(PlaybackBackendKind::Auto) {
                 Ok(backend) => main_state
                     .borrow_mut()
@@ -1982,7 +1982,7 @@ fn build_equalizer_window(
             EQUALIZER_WINDOW_HEIGHT
         };
         let base_width = EQUALIZER_WINDOW_WIDTH;
-        let render_key = (state.skin_generation, render_state.clone());
+        let render_key = (state.skin_generation, render_state);
         match render_scaled_to_gtk_cached(
             &mut render_cache.borrow_mut(),
             render_key,
@@ -5136,6 +5136,7 @@ enum MainPointer {
     DraggingSlider {
         slider: MainSlider,
         offset: i32,
+        position: i32,
     },
 }
 
@@ -9308,9 +9309,11 @@ impl MainWindowUiState {
 
         self.main_pointer = if let MainControl::Slider(slider) = control {
             self.main_keyboard_slider = Some(slider);
+            let offset = self.begin_slider_drag(slider, x);
             MainPointer::DraggingSlider {
                 slider,
-                offset: self.begin_slider_drag(slider, x),
+                offset,
+                position: self.slider_position(slider),
             }
         } else {
             MainPointer::PressedButton {
@@ -9332,8 +9335,22 @@ impl MainWindowUiState {
                 };
                 changed
             }
-            MainPointer::DraggingSlider { slider, offset } => {
-                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset)
+            MainPointer::DraggingSlider {
+                slider,
+                offset,
+                position,
+            } => {
+                let next_position = (x - self.slider_rect(slider).x - offset)
+                    .clamp(self.slider_min(slider), self.slider_max(slider));
+                if next_position == position {
+                    return false;
+                }
+                self.main_pointer = MainPointer::DraggingSlider {
+                    slider,
+                    offset,
+                    position: next_position,
+                };
+                self.set_slider_position(slider, next_position)
             }
         }
     }
@@ -9352,8 +9369,16 @@ impl MainWindowUiState {
                     _ => UiAction::None,
                 }
             }
-            MainPointer::DraggingSlider { slider, offset } => {
-                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset);
+            MainPointer::DraggingSlider {
+                slider,
+                offset,
+                position,
+            } => {
+                let next_position = (x - self.slider_rect(slider).x - offset)
+                    .clamp(self.slider_min(slider), self.slider_max(slider));
+                if next_position != position {
+                    self.set_slider_position(slider, next_position);
+                }
                 UiAction::None
             }
         }
@@ -10855,6 +10880,29 @@ static char * main_xpm[] = {
         state.press(263, 73);
         assert_eq!(state.release(263, 73), UiAction::None);
         assert_eq!(state.position(), 0);
+    }
+
+    #[test]
+    fn held_position_slider_does_not_seek_again_when_playback_advances() {
+        let mut state = MainWindowUiState::default();
+        state
+            .store
+            .state_mut()
+            .playlist
+            .add_timed_uri("file:///tmp/test.wav", "Test", 120_000);
+        state.store.state_mut().player.mark_playing();
+
+        state.press(20, 73);
+        assert!(state.motion(140, 73));
+        let dragged_position_ms = state.playback_position_ms();
+        state
+            .store
+            .update_playback_position_from_runtime(dragged_position_ms + 1_000);
+        let revision_before_release = state.store.revision();
+
+        assert_eq!(state.release(140, 73), UiAction::None);
+        assert_eq!(state.store.revision(), revision_before_release);
+        assert_eq!(state.playback_position_ms(), dragged_position_ms + 1_000);
     }
 
     #[test]

@@ -445,12 +445,23 @@ fn add_main_hit_regions(
             ui.ctx().request_repaint();
         }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
-            app.close_player_menus();
             let pointer = response.interact_pointer_pos().unwrap();
             let normalized = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
             let position =
                 layout.min + ((layout.max - layout.min) as f32 * normalized).round() as i32;
-            dispatch_slider(app, slider, position, view_model.shaded);
+            let position_changed = response.clicked()
+                || slider_drag_position_changed(
+                    &mut app.main_slider_drag_position,
+                    slider,
+                    position,
+                );
+            if position_changed {
+                app.close_player_menus();
+                dispatch_slider(app, slider, position, view_model.shaded);
+            }
+        }
+        if response.drag_stopped() {
+            app.main_slider_drag_position = None;
         }
     }
 }
@@ -540,6 +551,19 @@ fn dispatch_toggle(app: &mut EguiFrontendState, toggle: MainToggleButton) {
         MainToggleButton::Equalizer => app.dispatch(PanelCommand::ToggleEqualizerVisibility),
         MainToggleButton::Playlist => app.dispatch(PanelCommand::TogglePlaylistVisibility),
     }
+}
+
+fn slider_drag_position_changed(
+    previous: &mut Option<(MainSlider, i32)>,
+    slider: MainSlider,
+    position: i32,
+) -> bool {
+    let current = (slider, position);
+    if *previous == Some(current) {
+        return false;
+    }
+    *previous = Some(current);
+    true
 }
 
 fn dispatch_slider(app: &mut EguiFrontendState, slider: MainSlider, position: i32, shaded: bool) {
@@ -805,6 +829,27 @@ mod tests {
 
         assert_eq!(position_to_seek_ms(&app, 109, false), Some(109_000));
         assert_eq!(position_to_seek_ms(&app, 7, true), Some(109_500));
+    }
+
+    #[test]
+    fn held_slider_position_is_dispatched_only_once_until_it_changes() {
+        let mut previous = None;
+
+        assert!(slider_drag_position_changed(
+            &mut previous,
+            MainSlider::Position,
+            24,
+        ));
+        assert!(!slider_drag_position_changed(
+            &mut previous,
+            MainSlider::Position,
+            24,
+        ));
+        assert!(slider_drag_position_changed(
+            &mut previous,
+            MainSlider::Position,
+            25,
+        ));
     }
 
     #[test]
