@@ -417,7 +417,7 @@ where
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
 {
-    let _perf_span = crate::perf_span!("skin_discovery");
+    crate::perf_span!("skin_discovery");
     let mut skins = Vec::new();
     for dir in dirs {
         scan_skin_dir(dir.as_ref(), &mut skins)?;

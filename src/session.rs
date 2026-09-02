@@ -226,7 +226,7 @@ pub fn load_saved_state(
     playlist_path: &Path,
     reset: bool,
 ) -> io::Result<AppState> {
-    let _perf_span = crate::perf_span!("saved_state_load");
+    crate::perf_span!("saved_state_load");
     let config = if reset {
         Config::default()
     } else {
