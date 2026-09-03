@@ -109,7 +109,7 @@ impl Default for VisualizationRenderState {
             analyzer_mode: VisAnalyzerMode::Normal,
             scope_mode: VisScopeMode::Line,
             peaks_enabled: true,
-            vu_mode: VisVuMode::Normal,
+            vu_mode: VisVuMode::Segmented,
             data: [0.0; SPECTRUM_BANDS],
             peak: [0.0; SPECTRUM_BANDS],
             milkdrop_energy: 0.0,

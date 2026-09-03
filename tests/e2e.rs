@@ -1896,8 +1896,8 @@ fn visualization_windowshade_vu_mode_can_be_selected_from_rust_e2e() {
     let mut app = player(PlayerSettings::default().with_visualization_vu_mode(VisVuMode::Smooth));
 
     app.assert_visualization_vu_mode(VisVuMode::Smooth)
-        .set_visualization_vu_mode(VisVuMode::Normal)
-        .assert_visualization_vu_mode(VisVuMode::Normal);
+        .set_visualization_vu_mode(VisVuMode::Segmented)
+        .assert_visualization_vu_mode(VisVuMode::Segmented);
 }
 
 #[test]
