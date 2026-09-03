@@ -1413,7 +1413,7 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Show analyzer peaks",
             "Analyzer falloff:",
             "Peaks falloff:",
-            "WindowShade VU mode:",
+            "Window Shade Level Meter Style:",
             "Refresh rate:",
         ],
         PreferencesPage::Options => &[

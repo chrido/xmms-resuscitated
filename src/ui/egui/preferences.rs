@@ -698,9 +698,12 @@ fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
         );
         android_combo(
             ui,
-            "WindowShade VU mode",
+            "Window Shade Level Meter Style",
             &mut config.vis_vu_mode,
-            &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
+            &[
+                (VisVuMode::Segmented, "Segmented"),
+                (VisVuMode::Smooth, "Smooth"),
+            ],
         );
         android_combo(
             ui,
@@ -771,9 +774,12 @@ fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
         );
         combo(
             ui,
-            "WindowShade VU mode",
+            "Window Shade Level Meter Style",
             &mut config.vis_vu_mode,
-            &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
+            &[
+                (VisVuMode::Segmented, "Segmented"),
+                (VisVuMode::Smooth, "Smooth"),
+            ],
         );
         combo(
             ui,

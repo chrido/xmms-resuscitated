@@ -1175,7 +1175,7 @@ impl VisFalloffSpeed {
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisVuMode {
-    Normal = 0,
+    Segmented = 0,
     Smooth = 1,
 }
 
@@ -1183,7 +1183,7 @@ impl VisVuMode {
     pub fn from_i32(value: i32) -> Self {
         match value {
             1 => Self::Smooth,
-            _ => Self::Normal,
+            _ => Self::Segmented,
         }
     }
 }

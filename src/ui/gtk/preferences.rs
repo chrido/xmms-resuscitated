@@ -765,11 +765,11 @@ fn build_preferences_visualization_page(
     prefs_attach_label(&grid, "Peaks falloff:", &peaks_falloff, 6);
 
     let vu = gtk::ComboBoxText::new();
-    vu.append(Some("normal"), "Normal");
+    vu.append(Some("segmented"), "Segmented");
     vu.append(Some("smooth"), "Smooth");
     vu.set_active_id(Some(match main_state.borrow().visualization_vu_mode() {
         VisVuMode::Smooth => "smooth",
-        VisVuMode::Normal => "normal",
+        VisVuMode::Segmented => "segmented",
     }));
     {
         let main_state = Rc::clone(main_state);
@@ -777,7 +777,7 @@ fn build_preferences_visualization_page(
         vu.connect_changed(move |combo| {
             let mode = match combo.active_id().as_deref() {
                 Some("smooth") => VisVuMode::Smooth,
-                _ => VisVuMode::Normal,
+                _ => VisVuMode::Segmented,
             };
             main_state.borrow_mut().set_visualization_vu_mode(mode);
             if let Some(on_change) = &on_change {
@@ -785,7 +785,7 @@ fn build_preferences_visualization_page(
             }
         });
     }
-    prefs_attach_label(&grid, "WindowShade VU mode:", &vu, 7);
+    prefs_attach_label(&grid, "Window Shade Level Meter Style:", &vu, 7);
 
     let refresh = gtk::ComboBoxText::new();
     for (id, label) in [

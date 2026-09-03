@@ -134,7 +134,7 @@ impl Default for Config {
             vis_falloff: 0.04,
             vis_analyzer_falloff: VisFalloffSpeed::Fast,
             vis_peaks_falloff: VisFalloffSpeed::Slow,
-            vis_vu_mode: VisVuMode::Normal,
+            vis_vu_mode: VisVuMode::Segmented,
             vis_refresh_divisor: 1,
         }
     }

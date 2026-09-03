@@ -336,6 +336,37 @@ mod tests {
     }
 
     #[test]
+    fn windowshade_segmented_meter_matches_xmms_logical_pixel_layout() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let surface = ImageSurface::create(Format::ARgb32, 38, 5).unwrap();
+        let cr = Context::new(&surface).unwrap();
+        let mut state = VisualizationRenderState::default();
+        state.data[0] = 1.0;
+        render_windowshade_visualization(&cr, &skin, 0, 0, &state).unwrap();
+        drop(cr);
+        surface.flush();
+
+        let argb = |rgb: [u8; 3]| {
+            0xff00_0000 | (u32::from(rgb[0]) << 16) | (u32::from(rgb[1]) << 8) | u32::from(rgb[2])
+        };
+        let data = surface.data().unwrap();
+        let stride = surface.stride() as usize;
+        let pixel = |x: usize, y: usize| {
+            let offset = y * stride + x * 4;
+            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
+        };
+        let colors = skin.vis_colors();
+
+        assert_eq!(pixel(0, 0), argb(colors[17]));
+        assert_eq!(pixel(15, 0), argb(colors[12]));
+        assert_eq!(pixel(30, 0), argb(colors[2]));
+        assert_eq!(pixel(3, 0), argb(colors[0]));
+        assert_eq!(pixel(0, 2), argb(colors[0]));
+        assert_eq!(pixel(35, 0), argb(colors[0]));
+        assert_eq!(pixel(37, 4), argb(colors[0]));
+    }
+
+    #[test]
     fn renders_normal_and_windowshade_main_player_backgrounds() {
         let skin = DefaultSkin::load_bundled().unwrap();
 

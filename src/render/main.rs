@@ -109,7 +109,7 @@ impl Default for VisualizationRenderState {
             analyzer_mode: VisAnalyzerMode::Normal,
             scope_mode: VisScopeMode::Line,
             peaks_enabled: true,
-            vu_mode: VisVuMode::Normal,
+            vu_mode: VisVuMode::Segmented,
             data: [0.0; SPECTRUM_BANDS],
             peak: [0.0; SPECTRUM_BANDS],
             milkdrop_energy: 0.0,
@@ -503,8 +503,11 @@ pub fn render_windowshade_visualization(
     cr.save()?;
     cr.rectangle(f64::from(xdest), f64::from(ydest), 38.0, 5.0);
     cr.clip();
+    // Like XMMS, initialize every pixel in the 38x5 meter to viscolor[0]
+    // before drawing the active pixels on top.
     set_vis_color(cr, colors, 0);
-    cr.paint()?;
+    cr.rectangle(f64::from(xdest), f64::from(ydest), 38.0, 5.0);
+    cr.fill()?;
 
     if state.mode == VisMode::Off {
         cr.restore()?;
@@ -523,7 +526,10 @@ pub fn render_windowshade_visualization(
         return Ok(());
     }
 
-    const NORMAL_COLORS: [usize; 8] = [17, 17, 17, 12, 12, 12, 2, 2];
+    // This is the logical-pixel layout from XMMS's non-scaled renderer. The
+    // completed surface is scaled by the frontend, so applying XMMS's separate
+    // double-size rasterization here would shift an extra segment into view.
+    const SEGMENT_COLORS: [usize; 7] = [17, 17, 17, 12, 12, 12, 2];
     for row in 0..2 {
         let level = (state.data[row].clamp(0.0, 1.0) * 37.0 + 0.5).clamp(0.0, 37.0) as i32;
         if state.vu_mode == VisVuMode::Smooth {
@@ -544,9 +550,9 @@ pub fn render_windowshade_visualization(
                 cr.fill()?;
             }
         } else {
-            let bars = ((level * 7) / 37).clamp(0, 7);
-            for sx in 0..bars {
-                set_vis_color(cr, colors, NORMAL_COLORS[sx as usize]);
+            let segments = ((level * 7) / 37).clamp(0, 7);
+            for sx in 0..segments {
+                set_vis_color(cr, colors, SEGMENT_COLORS[sx as usize]);
                 cr.rectangle(
                     f64::from(xdest + sx * 5),
                     f64::from(ydest + row as i32 * 3),
