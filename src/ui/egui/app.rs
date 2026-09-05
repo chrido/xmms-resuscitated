@@ -1,6 +1,6 @@
 //! eframe application lifecycle for the egui frontend.
 
-#[cfg(any(feature = "desktop-egui", target_os = "android"))]
+#[cfg(target_os = "android")]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -59,16 +59,19 @@ use crate::render::{
     EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
     PLAYLIST_MIN_WIDTH,
 };
-use crate::session::default_config_dir;
 #[cfg(target_os = "android")]
-use crate::session::{fallback_state_paths, load_saved_state};
+use crate::session::{default_config_dir, fallback_state_paths, load_saved_state};
+#[cfg(any(feature = "desktop-egui", target_os = "android"))]
+use crate::skin::import_skin_to_user_dir;
 use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, playlist_footer_button_rect,
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
     PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton,
 };
+#[cfg(target_os = "android")]
+use crate::skin::user_skin_import_dir;
 use crate::skin::widget::{VisAnalyzerStyle, VisMode};
-use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
+use crate::skin::{discover_runtime_skins, DefaultSkin, SkinEntry};
 use crate::socket_control::{
     start_socket_control_with_wakeup, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
@@ -1656,7 +1659,7 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn refresh_runtime_skins(&mut self) {
-        self.skin_entries = discover_runtime_skins();
+        self.skin_entries = discover_runtime_skins().unwrap_or_default();
         self.skin_discovery_complete = true;
     }
 
@@ -1684,15 +1687,7 @@ impl EguiFrontendState {
 
     #[cfg(target_os = "android")]
     pub(crate) fn select_skin_path(&mut self, path: PathBuf) {
-        let entry = SkinEntry {
-            name: path
-                .file_stem()
-                .or_else(|| path.file_name())
-                .and_then(|name| name.to_str())
-                .unwrap_or("Imported skin")
-                .to_string(),
-            path,
-        };
+        let entry = SkinEntry::from_path(path);
         select_skin_entry(self, &entry);
     }
 
@@ -3326,17 +3321,8 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
         return;
     };
     match import_skin_to_user_dir(&path) {
-        Ok(imported) => {
+        Ok(entry) => {
             app.refresh_runtime_skins();
-            let entry = SkinEntry {
-                name: imported
-                    .file_stem()
-                    .or_else(|| imported.file_name())
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("Imported skin")
-                    .to_string(),
-                path: imported,
-            };
             select_skin_entry(app, &entry);
         }
         Err(err) => app
@@ -3361,17 +3347,8 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
 #[cfg(target_os = "android")]
 fn import_skin_path(app: &mut EguiFrontendState, path: &Path) {
     match import_skin_to_user_dir(path) {
-        Ok(imported) => {
+        Ok(entry) => {
             app.refresh_runtime_skins();
-            let entry = SkinEntry {
-                name: imported
-                    .file_stem()
-                    .or_else(|| imported.file_name())
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("Imported skin")
-                    .to_string(),
-                path: imported,
-            };
             select_skin_entry(app, &entry);
         }
         Err(err) => app
@@ -3381,48 +3358,9 @@ fn import_skin_path(app: &mut EguiFrontendState, path: &Path) {
     }
 }
 
-fn user_skin_import_dir() -> PathBuf {
-    default_config_dir().join("xmms").join("Skins")
-}
-
 #[cfg(target_os = "android")]
 pub(crate) fn is_user_imported_skin_path(path: &Path) -> bool {
     path.parent() == Some(user_skin_import_dir().as_path())
-}
-
-#[cfg(any(feature = "desktop-egui", target_os = "android"))]
-fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
-    let user_skin_dir = user_skin_import_dir();
-    fs::create_dir_all(&user_skin_dir)?;
-    let name = source.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("skin path has no file name: {}", source.display()),
-        )
-    })?;
-    let destination = user_skin_dir.join(name);
-    if source.is_dir() {
-        copy_dir_recursive(source, &destination)?;
-    } else {
-        fs::copy(source, &destination)?;
-    }
-    Ok(destination)
-}
-
-#[cfg(any(feature = "desktop-egui", target_os = "android"))]
-fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
-        } else {
-            fs::copy(&source_path, &destination_path)?;
-        }
-    }
-    Ok(())
 }
 
 fn send_duration_index_batch(
@@ -3439,23 +3377,6 @@ fn send_duration_index_batch(
     #[cfg(target_os = "android")]
     super::android::request_background_repaint();
     true
-}
-
-fn discover_runtime_skins() -> Vec<SkinEntry> {
-    let home_dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let system_skin_dir = std::env::var_os("XMMS_RS_SYSTEM_SKIN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/share/xmms/Skins"));
-    let skinsdir = std::env::var("SKINSDIR").ok();
-    let dirs = skin_browser_search_dirs(
-        &default_config_dir(),
-        &home_dir,
-        &system_skin_dir,
-        skinsdir.as_deref(),
-    );
-    discover_skins_in_dirs(dirs).unwrap_or_default()
 }
 
 fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {

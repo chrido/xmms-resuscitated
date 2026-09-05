@@ -95,7 +95,8 @@ use crate::skin::widget::{
     VisScopeMode, VisVuMode, Visualization, WidgetId,
 };
 use crate::skin::{
-    discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
+    discover_skins_in_dirs, import_skin_to_user_dir, runtime_skin_browser_dirs,
+    unique_skin_import_destination, DefaultSkin, SkinEntry, SkinPixmapKind,
 };
 use crate::skineditor::{
     ElementSlot, SkinEditorState, SkinGradient, Tool, COLOR_SHELF_SIZE, GRADIENT_SHELF_SIZE,
@@ -4542,13 +4543,12 @@ fn show_add_skin_dialog(
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
             if let Some(path) = dialog.file().and_then(|file| file.path()) {
-                let user_skin_dir = user_skin_import_dir();
-                match import_skin_to_user_dir(&path, &user_skin_dir) {
+                match import_skin_to_user_dir(&path) {
                     Ok(imported) => {
                         let dirs = runtime_skin_browser_dirs();
                         let mut state = main_state.borrow_mut();
                         state.update_config_via_store(|config| {
-                            config.skin = Some(imported.display().to_string());
+                            config.skin = Some(imported.path.display().to_string());
                         });
                         if let Err(err) = state.reload_skin() {
                             eprintln!("xmms-rs: failed to load imported skin: {err}");
@@ -4608,94 +4608,6 @@ fn build_skin_browser_content(add: &gtk::Button, close: &gtk::Button) -> (gtk::B
     (root, list)
 }
 
-fn user_skin_import_dir() -> PathBuf {
-    default_config_dir().join("xmms").join("Skins")
-}
-
-fn runtime_skin_browser_dirs() -> Vec<PathBuf> {
-    let home_dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let system_skin_dir = std::env::var_os("XMMS_RS_SYSTEM_SKIN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/share/xmms/Skins"));
-    let skinsdir = std::env::var("SKINSDIR").ok();
-    skin_browser_search_dirs(
-        &default_config_dir(),
-        &home_dir,
-        &system_skin_dir,
-        skinsdir.as_deref(),
-    )
-}
-
-fn import_skin_to_user_dir(source: &Path, user_skin_dir: &Path) -> io::Result<PathBuf> {
-    if !source.is_dir() && !source.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("not a skin file or directory: {}", source.display()),
-        ));
-    }
-    if source.is_file() && !is_importable_skin_archive(source) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported skin archive: {}", source.display()),
-        ));
-    }
-
-    fs::create_dir_all(user_skin_dir)?;
-    let name = source.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("skin path has no file name: {}", source.display()),
-        )
-    })?;
-    let destination = unique_import_destination(user_skin_dir, name);
-    if source.is_dir() {
-        copy_dir_recursive(source, &destination)?;
-    } else {
-        fs::copy(source, &destination)?;
-    }
-    Ok(destination)
-}
-
-fn is_importable_skin_archive(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    [
-        ".zip", ".wsz", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".gz", ".bz2",
-    ]
-    .iter()
-    .any(|suffix| name.ends_with(suffix))
-}
-
-fn unique_import_destination(user_skin_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
-    let candidate = user_skin_dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
-
-    let path = Path::new(name);
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("Skin");
-    let extension = path.extension().and_then(|extension| extension.to_str());
-    for index in 1.. {
-        let file_name = match extension {
-            Some(extension) => format!("{stem} {index}.{extension}"),
-            None => format!("{stem} {index}"),
-        };
-        let candidate = user_skin_dir.join(file_name);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!()
-}
-
 fn sanitized_skin_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
@@ -4726,21 +4638,6 @@ fn ensure_wsz_extension(mut path: PathBuf) -> PathBuf {
     }
     path.set_extension("wsz");
     path
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let entry_source = entry.path();
-        let entry_destination = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&entry_source, &entry_destination)?;
-        } else {
-            fs::copy(entry_source, entry_destination)?;
-        }
-    }
-    Ok(())
 }
 
 fn refresh_skin_browser_list<P: AsRef<Path>>(
@@ -6774,10 +6671,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn save_editor_skin_to_user_dir(&mut self) -> io::Result<PathBuf> {
-        let user_skin_dir = user_skin_import_dir();
+        let user_skin_dir = crate::skin::user_skin_import_dir();
         fs::create_dir_all(&user_skin_dir)?;
         let name = sanitized_skin_name(&self.skin_editor.working_name);
-        let destination = unique_import_destination(&user_skin_dir, std::ffi::OsStr::new(&name));
+        let destination =
+            unique_skin_import_destination(&user_skin_dir, std::ffi::OsStr::new(&name));
         self.active_skin.save_to_dir(&destination)?;
         self.update_config_via_store(|config| {
             config.skin = Some(destination.display().to_string())
@@ -10753,27 +10651,30 @@ static char * main_xpm[] = {
 
         let archive = source.join("Blue.wsz");
         fs::write(&archive, b"archive").unwrap();
-        let imported_archive = import_skin_to_user_dir(&archive, &user_skins).unwrap();
-        assert_eq!(imported_archive, user_skins.join("Blue.wsz"));
-        assert_eq!(fs::read(&imported_archive).unwrap(), b"archive");
+        let imported_archive = crate::skin::import_skin_to_dir(&archive, &user_skins).unwrap();
+        assert_eq!(imported_archive.path, user_skins.join("Blue.wsz"));
+        assert_eq!(fs::read(&imported_archive.path).unwrap(), b"archive");
 
-        let duplicate_archive = import_skin_to_user_dir(&archive, &user_skins).unwrap();
-        assert_eq!(duplicate_archive, user_skins.join("Blue 1.wsz"));
+        let duplicate_archive = crate::skin::import_skin_to_dir(&archive, &user_skins).unwrap();
+        assert_eq!(duplicate_archive.path, user_skins.join("Blue 1.wsz"));
 
         let dir_skin = source.join("Classic");
         fs::create_dir_all(dir_skin.join("nested")).unwrap();
         fs::write(dir_skin.join("main.xpm"), b"main").unwrap();
         fs::write(dir_skin.join("nested").join("eqmain.xpm"), b"eq").unwrap();
-        let imported_dir = import_skin_to_user_dir(&dir_skin, &user_skins).unwrap();
-        assert_eq!(fs::read(imported_dir.join("main.xpm")).unwrap(), b"main");
+        let imported_dir = crate::skin::import_skin_to_dir(&dir_skin, &user_skins).unwrap();
         assert_eq!(
-            fs::read(imported_dir.join("nested").join("eqmain.xpm")).unwrap(),
+            fs::read(imported_dir.path.join("main.xpm")).unwrap(),
+            b"main"
+        );
+        assert_eq!(
+            fs::read(imported_dir.path.join("nested").join("eqmain.xpm")).unwrap(),
             b"eq"
         );
 
         let unsupported = source.join("notes.txt");
         fs::write(&unsupported, b"not a skin").unwrap();
-        assert!(import_skin_to_user_dir(&unsupported, &user_skins).is_err());
+        assert!(crate::skin::import_skin_to_dir(&unsupported, &user_skins).is_err());
 
         fs::remove_dir_all(tmp).unwrap();
     }

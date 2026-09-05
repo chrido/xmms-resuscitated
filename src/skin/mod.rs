@@ -4,10 +4,13 @@ pub mod widget;
 pub mod xpm;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+
+use crate::session::default_config_dir;
 
 use image::GenericImageView;
 pub use layout::SkinPixmapInfo;
@@ -17,6 +20,16 @@ use xpm::XpmImage;
 pub struct SkinEntry {
     pub name: String,
     pub path: PathBuf,
+}
+
+impl SkinEntry {
+    /// Creates the browser representation for a discovered or imported skin.
+    pub fn from_path(path: PathBuf) -> Self {
+        Self {
+            name: skin_display_name(&path),
+            path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -431,6 +444,31 @@ where
     Ok(skins)
 }
 
+/// Returns the skin directories used by the running application.
+///
+/// This deliberately lives with skin discovery rather than in a frontend so GTK,
+/// desktop egui, and Android all apply the same environment-variable policy.
+pub fn runtime_skin_browser_dirs() -> Vec<PathBuf> {
+    let home_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let system_skin_dir = std::env::var_os("XMMS_RS_SYSTEM_SKIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/share/xmms/Skins"));
+    let skinsdir = std::env::var("SKINSDIR").ok();
+    skin_browser_search_dirs(
+        &default_config_dir(),
+        &home_dir,
+        &system_skin_dir,
+        skinsdir.as_deref(),
+    )
+}
+
+/// Discovers the skins available to the running application.
+pub fn discover_runtime_skins() -> io::Result<Vec<SkinEntry>> {
+    discover_skins_in_dirs(runtime_skin_browser_dirs())
+}
+
 pub fn skin_browser_search_dirs(
     user_config_dir: &Path,
     home_dir: &Path,
@@ -470,16 +508,14 @@ fn scan_skin_dir(dir: &Path, skins: &mut Vec<SkinEntry>) -> io::Result<()> {
 
         let file_type = entry.file_type()?;
         if file_type.is_dir() || (file_type.is_file() && is_skin_archive_path(&path)) {
-            skins.push(SkinEntry {
-                name: skin_display_name(&path),
-                path,
-            });
+            skins.push(SkinEntry::from_path(path));
         }
     }
     Ok(())
 }
 
-fn is_skin_archive_path(path: &Path) -> bool {
+/// Whether `path` has an archive format supported by the skin loader.
+pub fn is_skin_archive_path(path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -499,14 +535,104 @@ fn skin_display_name(path: &Path) -> String {
 
     let mut name = file_name.to_string();
     if is_skin_archive_path(path) {
-        if let Some((base, _ext)) = name.rsplit_once('.') {
+        if let Some((base, _extension)) = skin_name_parts(file_name) {
             name = base.to_string();
-        }
-        if name.to_ascii_lowercase().strip_suffix(".tar").is_some() {
-            name.truncate(name.len() - 4);
         }
     }
     name
+}
+
+/// Returns the directory where user-imported skins are stored.
+pub fn user_skin_import_dir() -> PathBuf {
+    default_config_dir().join("xmms").join("Skins")
+}
+
+/// Imports a supported skin archive or skin directory into the user's skin library.
+///
+/// The returned entry has the same display-name rules as entries found during
+/// discovery. Existing imports are never overwritten; a numeric suffix is added.
+pub fn import_skin_to_user_dir(source: &Path) -> io::Result<SkinEntry> {
+    import_skin_to_dir(source, &user_skin_import_dir())
+}
+
+/// Imports a supported skin archive or skin directory into `destination_dir`.
+///
+/// This variant makes the import policy usable by frontends with an explicitly
+/// managed storage root and by unit tests without depending on process state.
+pub fn import_skin_to_dir(source: &Path, destination_dir: &Path) -> io::Result<SkinEntry> {
+    if !source.is_dir() && !source.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a skin file or directory: {}", source.display()),
+        ));
+    }
+    if source.is_file() && !is_skin_archive_path(source) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported skin archive: {}", source.display()),
+        ));
+    }
+
+    fs::create_dir_all(destination_dir)?;
+    let name = source.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("skin path has no file name: {}", source.display()),
+        )
+    })?;
+    let destination = unique_skin_import_destination(destination_dir, name);
+    if source.is_dir() {
+        copy_skin_dir_recursive(source, &destination)?;
+    } else {
+        fs::copy(source, &destination)?;
+    }
+    Ok(SkinEntry::from_path(destination))
+}
+
+/// Finds a collision-free destination for a skin name in `destination_dir`.
+pub fn unique_skin_import_destination(destination_dir: &Path, name: &OsStr) -> PathBuf {
+    let candidate = destination_dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let name = name.to_string_lossy();
+    let (stem, extension) = skin_name_parts(&name).unwrap_or((&name, ""));
+    for index in 1.. {
+        let file_name = format!("{stem} {index}{extension}");
+        let candidate = destination_dir.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn skin_name_parts(name: &str) -> Option<(&str, &str)> {
+    const ARCHIVE_EXTENSIONS: &[&str] = &[
+        ".tar.bz2", ".tar.gz", ".tbz2", ".tgz", ".zip", ".wsz", ".tar",
+    ];
+    let lowercase = name.to_ascii_lowercase();
+    ARCHIVE_EXTENSIONS.iter().find_map(|extension| {
+        lowercase
+            .strip_suffix(extension)
+            .map(|stem| (&name[..stem.len()], &name[stem.len()..]))
+    })
+}
+
+fn copy_skin_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_source = entry.path();
+        let entry_destination = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_skin_dir_recursive(&entry_source, &entry_destination)?;
+        } else {
+            fs::copy(entry_source, entry_destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
@@ -1502,6 +1628,17 @@ static char * main_xpm[] = {
     }
 
     #[test]
+    fn skin_entry_uses_the_same_name_for_discovery_and_imports() {
+        let archive = PathBuf::from("Example.TAR.GZ");
+        let entry = SkinEntry::from_path(archive.clone());
+        assert_eq!(entry.path, archive);
+        assert_eq!(entry.name, "Example");
+
+        let directory = SkinEntry::from_path(PathBuf::from("Classic"));
+        assert_eq!(directory.name, "Classic");
+    }
+
+    #[test]
     fn archive_discovery_matches_loader_supported_extensions() {
         assert!(is_skin_archive_path(Path::new("Example.zip")));
         assert!(is_skin_archive_path(Path::new("Example.wsz")));
@@ -1513,6 +1650,111 @@ static char * main_xpm[] = {
         assert!(!is_skin_archive_path(Path::new("Example.gz")));
         assert!(!is_skin_archive_path(Path::new("Example.bz2")));
         assert!(!is_skin_archive_path(Path::new("Example.txt")));
+    }
+
+    #[test]
+    fn importing_skins_uses_loader_formats_and_preserves_compound_extensions() {
+        let root = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-import-formats-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).unwrap();
+
+        for extension in ["zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2"] {
+            let source_path = source.join(format!("Example.{extension}"));
+            fs::write(&source_path, b"skin archive").unwrap();
+            let imported = import_skin_to_dir(&source_path, &destination).unwrap();
+            assert_eq!(
+                imported.path,
+                destination.join(format!("Example.{extension}"))
+            );
+            assert_eq!(imported.name, "Example");
+        }
+
+        for extension in ["gz", "bz2", "txt"] {
+            let source_path = source.join(format!("Unsupported.{extension}"));
+            fs::write(&source_path, b"not a skin archive").unwrap();
+            let err = import_skin_to_dir(&source_path, &destination).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn importing_a_skin_directory_copies_recursively_and_never_overwrites() {
+        let root = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-import-directory-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source").join("Classic");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("main.xpm"), b"main").unwrap();
+        fs::write(source.join("nested/eqmain.xpm"), b"equalizer").unwrap();
+
+        let first = import_skin_to_dir(&source, &destination).unwrap();
+        assert_eq!(first.name, "Classic");
+        assert_eq!(fs::read(first.path.join("main.xpm")).unwrap(), b"main");
+        assert_eq!(
+            fs::read(first.path.join("nested/eqmain.xpm")).unwrap(),
+            b"equalizer"
+        );
+
+        fs::write(source.join("main.xpm"), b"new main").unwrap();
+        let second = import_skin_to_dir(&source, &destination).unwrap();
+        assert_eq!(second.path, destination.join("Classic 1"));
+        assert_eq!(fs::read(first.path.join("main.xpm")).unwrap(), b"main");
+        assert_eq!(fs::read(second.path.join("main.xpm")).unwrap(), b"new main");
+
+        let discovered = discover_skins_in_dirs([&destination]).unwrap();
+        assert_eq!(
+            discovered,
+            vec![
+                SkinEntry::from_path(first.path),
+                SkinEntry::from_path(second.path),
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unique_import_destination_keeps_compound_archive_extension() {
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-skin-import-name-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Example.tar.gz"), b"existing").unwrap();
+        assert_eq!(
+            unique_skin_import_destination(&root, OsStr::new("Example.tar.gz")),
+            root.join("Example 1.tar.gz")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skin_browser_search_dirs_includes_standard_and_environment_directories() {
+        let dirs = skin_browser_search_dirs(
+            Path::new("/config"),
+            Path::new("/home/tester"),
+            Path::new("/system/Skins"),
+            Some("/extra/one::/extra/two"),
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/config/xmms/Skins"),
+                PathBuf::from("/home/tester/.xmms/Skins"),
+                PathBuf::from("/system/Skins"),
+                PathBuf::from("/extra/one"),
+                PathBuf::from("/extra/two"),
+            ]
+        );
     }
 
     #[test]
